@@ -1,0 +1,28 @@
+incidents:
+  - title: "Application Crashing on Login"
+    report: |
+      Issue: Application Crashing on Login
+      Description: After a recent deployment, users reported that the application crashes upon entering valid login credentials. The issue was traced to a null pointer exception introduced in the new authentication logic.
+      Impact: Users are unable to log in, resulting in service downtime for 100% of active users.
+      Resolution: Rolled back to the previous version of the login module and scheduled a hotfix deployment after thorough testing.
+
+  - title: "S3 Bucket Access Denied"
+    report: |
+      Issue: Application Crashing on Login
+      Description: After a recent deployment, users reported that the application crashes upon entering valid login credentials. The issue was traced to a null pointer exception introduced in the new authentication logic.
+      Impact: Users are unable to log in, resulting in service downtime for 100% of active users.
+      Resolution: Rolled back to the previous version of the login module and scheduled a hotfix deployment after thorough testing.
+
+  - title: "Database Connection Timeout"
+    report: |
+      Issue: Application Crashing on Login
+      Description: After a recent deployment, users reported that the application crashes upon entering valid login credentials. The issue was traced to a null pointer exception introduced in the new authentication logic.
+      Impact: Users are unable to log in, resulting in service downtime for 100% of active users.
+      Resolution: Rolled back to the previous version of the login module and scheduled a hotfix deployment after thorough testing.
+
+  - title: "High Latency in CDN"
+    report: |
+      Issue: Application Crashing on Login
+      Description: After a recent deployment, users reported that the application crashes upon entering valid login credentials. The issue was traced to a null pointer exception introduced in the new authentication logic.
+      Impact: Users are unable to log in, resulting in service downtime for 100% of active users.
+      Resolution: Rolled back to the previous version of the login module and scheduled a hotfix deployment after thorough testing.
