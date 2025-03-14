@@ -62,4 +62,6 @@ export const StateAnnotation = Annotation.Root({
    */
   // additionalField: Annotation<string>,
   endGraphSignal: Annotation<boolean>,
+  lastSlackMessage: Annotation<any>,
+  currentSlackMessage: Annotation<any>,
 });

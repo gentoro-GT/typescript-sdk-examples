@@ -1,15 +1,13 @@
 import { describe, it, expect } from "@jest/globals";
-import { IncidentGenerator } from "../src/agent/incidents.js";
+// import { IncidentGenerator } from "../src/agent/incidents.js";
 import { Message } from "../src/agent/utils.js";
 import { graph } from "../src/agent/graph.js";
 import { isAIMessage } from "@langchain/core/messages";
 
 describe("Graph", () => {
   it("should process input through the graph", async () => {
-    const incidentGenerator = new IncidentGenerator();
-    const result = await graph.invoke({
-      messages: [Message.human(incidentGenerator.randomIncident())],
-    });
+    // const incidentGenerator = new IncidentGenerator();
+    const result = await graph.invoke({});
 
     expect(result).toBeDefined();
     expect(typeof result).toBe("object");

@@ -40,12 +40,37 @@ dotenv.config();
 const { env } = process;
 const config: SdkConfig = {
   apiKey: env.GENTORO_API_KEY,
-  baseUrl: "http://localhost:8082",
-  authModBaseUrl: "http://localhost:3000",
+  baseUrl: "https://stage.gentoro.com/api",
+  authModBaseUrl: "https://stage.gentoro.com/auth",
   provider: Providers.Gentoro,
 };
 const templateGenerator = new TemplateGenerator();
 const gentoro = new Gentoro(config);
+
+const ObjectUtils = {
+  isSet: (obj: any): boolean => {
+    return obj !== null && obj !== undefined;
+  },
+};
+
+const StringUtils = {
+  isBlank: (str: string | null | undefined): boolean => {
+    return !str || /^\s*$/.test(str);
+  },
+  stringify: (str: string | undefined) => {
+    return (str || "").replace(/[\n\r]/g, "\\n").trim();
+  },
+};
+
+const slackTsAsDate = (slackTs: string): Date => {
+  // Parse the timestamp, converting seconds to milliseconds
+  const milliseconds = parseFloat(slackTs) * 1000;
+  return new Date(milliseconds);
+};
+
+const sleep = (ms: number) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
 
 /**
  * Load all mapped tools from Gentoro.
@@ -144,11 +169,75 @@ const loadRunbook = async (
         Message.system(
           templateGenerator.formattedTemplate("leading_message_with_context", {
             run_book_content: runBook,
+            jira_project_name: env.JIRA_PROJECT_NAME as string,
             incident_report: state.messages[0].content as string,
           }),
         ),
       ],
     };
+  }
+};
+
+const loadLastSlackMessage = async (
+  state: typeof StateAnnotation.State,
+): Promise<typeof StateAnnotation.Update> => {
+  const params: Record<string, string | number> = {
+    channel_id: env.SLACK_CHANNEL_ID as string,
+    limit_per_page: 50,
+  };
+  if (state.lastSlackMessage !== null) {
+    params["oldest"] = state.lastSlackMessage?.timestamp;
+  }
+
+  const result: ExecResult = (await gentoro.runToolNatively(
+    env.GENTORO_BRIDGE_UID as string,
+    "slack_list_messages_from_channel",
+    params,
+  )) as ExecResult;
+  if (result.type === ExecResulType.Error) {
+    const execError: ExecError = result.data as ExecError;
+    return {
+      endGraphSignal: true,
+      messages: [
+        Message.system(
+          templateGenerator.formattedTemplate("report_unrecoverable_error", {
+            error_message:
+              "There was an error attempting to load the runbook." +
+              execError.message,
+          }),
+        ),
+      ],
+    };
+  } else {
+    const data: ExecOutput = result.data as ExecOutput;
+    const messagesFromChannel: any[] | undefined = JSON.parse(
+      JSON.parse(data.content)?.messages,
+    ) as any[] | undefined;
+
+    if (!ObjectUtils.isSet(state.lastSlackMessage)) {
+      return {
+        lastSlackMessage:
+          (messagesFromChannel || []).length > 0
+            ? (messagesFromChannel || [])[0]
+            : null,
+      };
+    } else {
+      const incidentReport = (messagesFromChannel || []).find(
+        (m) =>
+          slackTsAsDate(m.timestamp) >
+          slackTsAsDate(state.lastSlackMessage?.timestamp),
+      );
+      if (ObjectUtils.isSet(incidentReport)) {
+        return {
+          currentSlackMessage: incidentReport,
+          messages: [Message.human(incidentReport?.content)],
+        };
+      } else {
+        console.log("No incident reported yet, waiting 5s before next check");
+        await sleep(5000);
+        return {};
+      }
+    }
   }
 };
 
@@ -278,18 +367,26 @@ const callModel = async (
   };
 };
 
-const StringUtils = {
-  isBlank: (str: string | null | undefined): boolean => {
-    return !str || /^\s*$/.test(str);
-  },
-  stringify: (str: string | undefined) => {
-    return (str || "").replace(/[\n\r]/g, "\\n").trim();
-  },
-};
-
-const reAct = async (
+const reasoning = async (
   state: typeof StateAnnotation.State,
 ): Promise<typeof StateAnnotation.Update> => {
+  if (
+    !ObjectUtils.isSet(state.currentSlackMessage) ||
+    !ObjectUtils.isSet(state.lastSlackMessage)
+  ) {
+    // should collect messages from slack
+    return {};
+  }
+
+  if (
+    !ObjectUtils.isSet(state.messages) ||
+    state.messages.length === 0 ||
+    (state.messages.length === 1 && isHumanMessage(state.messages[0]))
+  ) {
+    // Only has the incident report, should load current runBook.
+    return {};
+  }
+
   const reActMessages: BaseMessage[] = [];
   const updatedState: Record<any, any> = {
     messages: reActMessages,
@@ -371,8 +468,6 @@ const reAct = async (
 
     reActMessages.push(m);
   }
-
-  console.log("reActState", updatedState);
   return updatedState;
 };
 
@@ -381,24 +476,49 @@ const reAct = async (
  * This function decides if the gathered information is satisfactory or if more research is needed.
  *
  * @param state - The current state of the research builder
- * @returns Either "callModel" to continue research or END to finish the builder
+ * @returns Either "LLMCommunication" to continue research or END to finish the builder
  */
 export const route = (
   state: typeof StateAnnotation.State,
-): "__end__" | "callModel" | "callTools" => {
+):
+  | "__end__"
+  | "LLMCommunication"
+  | "ToolExecution"
+  | "SlackMonitoring"
+  | "RunbookCollection" => {
   if (state.endGraphSignal === true) {
     // something went wrong, second system message means that an error was reported.
     return END;
   }
 
+  if (
+    !ObjectUtils.isSet(state.lastSlackMessage) ||
+    !ObjectUtils.isSet(state.currentSlackMessage)
+  ) {
+    console.log("Collecting state from slack");
+    return "SlackMonitoring";
+  }
+
+  if (
+    !ObjectUtils.isSet(state.messages) ||
+    state.messages.length === 0 ||
+    (state.messages.length === 1 && isHumanMessage(state.messages[0]))
+  ) {
+    // Only has the incident report, should load current runBook.
+    console.log("Loading most up to date Runbook");
+    return "RunbookCollection";
+  }
+
   const lastMessage = Message.lastMessage(state.messages);
   if (state.toolCalls && state.toolCalls.length > 0) {
     //AI needs one or more tools to be called.
-    return "callTools";
+    console.log("Running tools");
+    return "ToolExecution";
   }
 
   if (isHumanMessage(lastMessage) || isSystemMessage(lastMessage)) {
-    return "callModel";
+    console.log("Calling model");
+    return "LLMCommunication";
   }
 
   return END;
@@ -406,16 +526,24 @@ export const route = (
 
 // Finally, create the graph itself.
 const builder = new StateGraph(StateAnnotation)
-  .addNode("callModel", callModel)
-  .addNode("callTools", callTools)
-  .addNode("loadRunBook", loadRunbook)
-  .addNode("reAct", reAct)
+  .addNode("LLMCommunication", callModel)
+  .addNode("ToolExecution", callTools)
+  .addNode("RunbookCollection", loadRunbook)
+  .addNode("SlackMonitoring", loadLastSlackMessage)
+  .addNode("Reasoning", reasoning)
 
-  .addEdge(START, "loadRunBook")
-  .addEdge("loadRunBook", "reAct")
-  .addEdge("callTools", "reAct")
-  .addEdge("callModel", "reAct")
-  .addConditionalEdges("reAct", route, ["callModel", "callTools", END]);
+  .addEdge(START, "SlackMonitoring")
+  .addEdge("SlackMonitoring", "Reasoning")
+  .addEdge("ToolExecution", "Reasoning")
+  .addEdge("LLMCommunication", "Reasoning")
+  .addEdge("RunbookCollection", "Reasoning")
+  .addConditionalEdges("Reasoning", route, [
+    "LLMCommunication",
+    "ToolExecution",
+    "RunbookCollection",
+    "SlackMonitoring",
+    END,
+  ]);
 
 export const graph = builder.compile();
 graph.name = "Production Support Agent";
